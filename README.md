@@ -23,6 +23,25 @@ A modern React Native mobile app that delivers live weather updates, personalize
 - **Utilities**: Axios (HTTP), AsyncStorage (caching), Geolocation, Animated (UI effects), LinearGradient, ImageBackground
 - **Build Tools**: Gradle 9.0.0, Hermes JS Engine
 
+
 ## 📦 Installation
 
-1. **Clone the repo**:
+Clone the repo: ``` clone https://github.com/yourusername/weather-news-app.git```
+``` cd weather-news-app```
+Install dependencies:```npm install```
+## Android Setup:
+Add ```google-services.json to android/app/``` (download from Firebase Console).
+Update API_KEY (NewsAPI) and WEATHER_KEY (WeatherAPI) in src/screens/HomeScreen.js.
+Run:```npx react-native run-android```
+
+
+
+## 🔧 Configuration
+
+Firebase: Enable Google Sign-In in Authentication > Sign-in method. Add SHA-1 fingerprint (from ./gradlew signingReport) in Project Settings > Your Android App.
+APIs:
+NewsAPI: Free key from newsapi.org/register.
+WeatherAPI: Free key from weatherapi.com/signup.aspx.
+
+Assets: Add sunny_bg.jpg, rainy_bg.jpg, cloudy_bg.jpg to src/assets/ for dynamic backgrounds.
+Permissions: AndroidManifest.xml already has location perms; iOS Info.plist needs NSLocationWhenInUseUsageDescription.
