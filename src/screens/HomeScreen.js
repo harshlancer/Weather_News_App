@@ -153,7 +153,11 @@ const HomeScreen = ({navigation}) => {
       console.log('Weather API error:', e.response?.data || e.message);
       setError('Failed to fetch weather');
     }
-
+if (weather && weather.desc.toLowerCase().includes('rain')) {
+  // Send local notif or log for server push
+  console.log('Rain alert ready — send push!');
+  // To send via FCM: Use token from App.js + FCM console
+}
     setWeatherLoading(false);
   };
 
