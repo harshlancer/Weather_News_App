@@ -1,145 +1,87 @@
 // src/screens/ProfileScreen.js
-import React from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, Image, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
 import auth from '@react-native-firebase/auth';
 import { useTheme } from '../context/ThemeContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const FavoritesKey = 'news_favorites_v1';
 
 const ProfileScreen = ({ navigation }) => {
-  const { colors, theme, toggleTheme } = useTheme();
+  const { colors, theme, toggleTheme, units, toggleUnits } = useTheme();
   const user = auth().currentUser;
+  const [favCount, setFavCount] = useState(0);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const fav = await AsyncStorage.getItem(FavoritesKey);
+        if (fav) setFavCount(Object.keys(JSON.parse(fav)).length);
+      } catch (e) {}
+    })();
+  }, []);
 
   const handleLogout = async () => {
-    try {
-      await auth().signOut();
-      Alert.alert('Logged out', 'See you soon!');
-    } catch (error) {
-    }
+    Alert.alert('Logout', 'Are you sure you want to sign out?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: async () => {
+          await auth().signOut();
+        },
+      },
+    ]);
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.card, { backgroundColor: colors.card }]}>
-        {/* User Photo or Initial */}
         {user?.photoURL ? (
           <Image source={{ uri: user.photoURL }} style={styles.avatar} />
         ) : (
-          <View style={[styles.avatar, styles.placeholder]}>
-            <Text style={styles.placeholderText}>
-              {user?.displayName?.[0]?.toUpperCase() || 'U'}
-            </Text>
+          <View style={[styles.avatar, styles.placeholder, { backgroundColor: colors.primary }]}>
+            <Text style={styles.placeholderText}>{(user?.displayName?.[0] || 'U').toUpperCase()}</Text>
           </View>
         )}
 
-        {/* Name & Email */}
-        <Text style={[styles.name, { color: colors.text }]}>
-          {user?.displayName || 'Guest User'}
-        </Text>
-        <Text style={[styles.email, { color: '#666' }]}>
-          {user?.email || 'No email'}
-        </Text>
+        <Text style={[styles.name, { color: colors.text }]}>{user?.displayName || 'Guest'}</Text>
+        <Text style={[styles.email, { color: colors.muted }]}>{user?.email || 'No email'}</Text>
 
-        {/* Theme Toggle */}
-        <TouchableOpacity style={styles.themeBtn} onPress={toggleTheme}>
-          <Text style={styles.themeText}>
-            Switch to {theme === 'light' ? 'Dark' : 'Light'} Mode
-          </Text>
+        <TouchableOpacity style={[styles.actionBtn, { backgroundColor: colors.primary }]} onPress={toggleTheme}>
+          <Text style={{ color: '#fff', fontWeight: '700' }}>Switch Theme</Text>
         </TouchableOpacity>
 
-        {/* Logout Button */}
-        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-          <Text style={styles.logoutText}>Logout</Text>
+        <TouchableOpacity style={[styles.actionBtn, { backgroundColor: colors.accent }]} onPress={toggleUnits}>
+          <Text style={{ color: '#fff', fontWeight: '700' }}>Units: {units.toUpperCase()}</Text>
         </TouchableOpacity>
 
-        {/* Back to Home */}
-        <TouchableOpacity 
-          style={styles.backBtn}
-          onPress={() => navigation.navigate('Home')}
-        >
-          <Text style={styles.backText}>Back to Home</Text>
+        <TouchableOpacity style={[styles.logoutBtn]} onPress={handleLogout}>
+          <Text style={[styles.logoutText]}>Logout</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.navigate('Home')}>
+          <Text style={{ color: colors.primary }}>Back to Home</Text>
+        </TouchableOpacity>
+
+        <Text style={{ marginTop: 12, color: colors.muted }}>{favCount} favorites saved</Text>
       </View>
-    </View>
+    </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  card: {
-    width: '90%',
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-  },
-  avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    marginBottom: 16,
-  },
-  placeholder: {
-    backgroundColor: '#007bff',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  placeholderText: {
-    color: '#fff',
-    fontSize: 36,
-    fontWeight: 'bold',
-  },
-  name: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  email: {
-    fontSize: 16,
-    marginBottom: 24,
-  },
-  themeBtn: {
-    backgroundColor: '#f0f0f0',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
-    marginBottom: 12,
-    width: '100%',
-    alignItems: 'center',
-  },
-  themeText: {
-    fontSize: 16,
-    color: '#333',
-  },
-  logoutBtn: {
-    backgroundColor: '#dc3545',
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: 8,
-    marginBottom: 12,
-    width: '100%',
-    alignItems: 'center',
-  },
-  logoutText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  backBtn: {
-    padding: 10,
-  },
-  backText: {
-    color: '#007bff',
-    fontSize: 16,
-  },
+  container: { flex: 1 },
+  card: { margin: 18, borderRadius: 16, padding: 22, alignItems: 'center', elevation: 6 },
+  avatar: { width: 110, height: 110, borderRadius: 60, marginBottom: 12 },
+  placeholder: { justifyContent: 'center', alignItems: 'center' },
+  placeholderText: { color: '#fff', fontSize: 36, fontWeight: '900' },
+  name: { fontSize: 22, fontWeight: '900' },
+  email: { fontSize: 14, marginBottom: 14 },
+  actionBtn: { marginTop: 12, paddingVertical: 12, paddingHorizontal: 28, borderRadius: 12 },
+  logoutBtn: { marginTop: 12, backgroundColor: '#dc3545', paddingHorizontal: 28, paddingVertical: 12, borderRadius: 12 },
+  logoutText: { color: '#fff', fontWeight: '800' },
+  backBtn: { marginTop: 8, padding: 10 },
 });
 
 export default ProfileScreen;

@@ -1,6 +1,5 @@
 // src/screens/HomeScreen.js
-import React, {useState, useEffect} from 'react';
-import { Image } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,50 +10,77 @@ import {
   Dimensions,
   Animated,
   StatusBar,
+  TextInput,
+  TouchableOpacity,
+  SafeAreaView,
+  ImageBackground,
+  Platform,
 } from 'react-native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Geolocation from '@react-native-community/geolocation';
-import {useTheme} from '../context/ThemeContext';
+import { useTheme } from '../context/ThemeContext';
 import NewsCard from '../components/NewsCard';
 import LinearGradient from 'react-native-linear-gradient';
-import { ImageBackground } from 'react-native';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Image } from 'react-native';
 
-const {height: SCREEN_HEIGHT, width: SCREEN_WIDTH} = Dimensions.get('window');
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const DEFAULT_LAT = 28.6139;
 const DEFAULT_LON = 77.209;
-const API_KEY = '995e4a922f2a496f9bbf2ffe227a4e33';
+
+// KEYS
+// NOTE: If you're getting empty articles, your News API key might be on the free tier
+// which has limitations. Try these solutions:
+// 1. Use 'everything' endpoint: https://newsapi.org/v2/everything?q=india&apiKey=...
+// 2. Try without 'category' parameter
+// 3. Check your API key at https://newsapi.org/account
+// 4. Free tier limit: 100 requests/day, 1 month old articles max
+const NEWS_API_KEY = '995e4a922f2a496f9bbf2ffe227a4e33';
 const WEATHER_KEY = 'cf02502718e0482abc0131032250602';
 
-const AnimatedFlatList = Animated.createAnimatedComponent(FlatList);
+const STORAGE = {
+  NEWS: 'cached_news_v2',
+  FAVS: 'news_favorites_v1',
+};
 
-// 🎨 Dynamic background mapping
 const WEATHER_BACKGROUNDS = {
   sunny: require('../assets/sunny_bg.jpg'),
   rainy: require('../assets/rainy_bg.jpg'),
   cloudy: require('../assets/cloudy_bg.jpg'),
 };
 
-// 🌤️ Weather gradient colors based on condition
 const WEATHER_GRADIENTS = {
-  sunny: ['rgba(251, 191, 36, 0.4)', 'rgba(245, 158, 11, 0.2)', 'transparent'],
-  rainy: ['rgba(71, 85, 105, 0.5)', 'rgba(51, 65, 85, 0.3)', 'transparent'],
-  cloudy: ['rgba(100, 116, 139, 0.4)', 'rgba(71, 85, 105, 0.2)', 'transparent'],
+  sunny: ['rgba(251, 191, 36, 0.35)', 'rgba(245, 158, 11, 0.15)', 'transparent'],
+  rainy: ['rgba(71, 85, 105, 0.45)', 'rgba(51, 65, 85, 0.25)', 'transparent'],
+  cloudy: ['rgba(100, 116, 139, 0.35)', 'rgba(71, 85, 105, 0.18)', 'transparent'],
 };
 
-const HomeScreen = ({navigation}) => {
-  const {colors, theme, toggleTheme} = useTheme();
+const getWeatherCondition = (d) => {
+  const desc = (d || '').toLowerCase();
+  if (desc.includes('rain') || desc.includes('shower')) return 'rainy';
+  if (desc.includes('cloud') || desc.includes('mist') || desc.includes('fog')) return 'cloudy';
+  return 'sunny';
+};
+
+const AnimatedFlatList = Animated.createAnimatedComponent(FlatList);
+
+const HomeScreen = ({ navigation }) => {
+  const { colors, units, toggleUnits, theme } = useTheme();
+
   const [news, setNews] = useState([]);
+  const [favorites, setFavorites] = useState({});
   const [weather, setWeather] = useState(null);
   const [loading, setLoading] = useState(false);
   const [weatherLoading, setWeatherLoading] = useState(true);
+  const [query, setQuery] = useState('');
   const [error, setError] = useState(null);
   const [weatherCondition, setWeatherCondition] = useState('sunny');
+  const [refreshing, setRefreshing] = useState(false);
 
-  const scrollY = React.useRef(new Animated.Value(0)).current;
-  const fadeAnim = React.useRef(new Animated.Value(0)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scrollY = useRef(new Animated.Value(0)).current;
 
-  // 🎭 Animated interpolations
   const parallaxTranslate = scrollY.interpolate({
     inputRange: [0, 200],
     outputRange: [0, -60],
@@ -63,222 +89,226 @@ const HomeScreen = ({navigation}) => {
 
   const weatherHeight = scrollY.interpolate({
     inputRange: [0, 200],
-    outputRange: [SCREEN_HEIGHT * 0.5, 0],
+    outputRange: [SCREEN_HEIGHT * 0.48, 0],
     extrapolate: 'clamp',
   });
 
   const weatherOpacity = scrollY.interpolate({
     inputRange: [0, 150, 200],
-    outputRange: [1, 0.3, 0],
+    outputRange: [1, 0.4, 0],
     extrapolate: 'clamp',
   });
-
-  const weatherTranslateY = scrollY.interpolate({
-    inputRange: [0, 200],
-    outputRange: [0, -50],
-    extrapolate: 'clamp',
-  });
-
-  const tempScale = scrollY.interpolate({
-    inputRange: [0, 200],
-    outputRange: [1, 0.6],
-    extrapolate: 'clamp',
-  });
-
-  // 🎨 Determine weather condition from description
-  const getWeatherCondition = (description) => {
-    const desc = description.toLowerCase();
-    if (desc.includes('rain') || desc.includes('drizzle') || desc.includes('shower')) {
-      return 'rainy';
-    } else if (desc.includes('cloud') || desc.includes('overcast') || desc.includes('mist') || desc.includes('fog')) {
-      return 'cloudy';
-    }
-    return 'sunny'; // Clear, Sunny, Partly cloudy, etc.
-  };
-
-  const fetchNews = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const cached = await AsyncStorage.getItem('news');
-      if (cached) setNews(JSON.parse(cached));
-
-      const res = await axios.get(
-        `https://newsapi.org/v2/top-headlines?country=in&apiKey=${API_KEY}`,
-      );
-      if (res.data.articles && res.data.articles.length > 0) {
-        setNews(res.data.articles);
-        await AsyncStorage.setItem('news', JSON.stringify(res.data.articles));
-      } else {
-        setError('No news articles found');
-      }
-    } catch (e) {
-      console.log('News error:', e);
-      setError('Failed to fetch news');
-    }
-    setLoading(false);
-  };
-
-  const fetchWeather = async (lat = DEFAULT_LAT, lon = DEFAULT_LON) => {
-    setWeatherLoading(true);
-    setError(null);
-
-    try {
-      const res = await axios.get(
-        `https://api.weatherapi.com/v1/current.json?key=${WEATHER_KEY}&q=${lat},${lon}&aqi=no`,
-      );
-
-      const current = res.data.current;
-      const condition = getWeatherCondition(current.condition.text);
-      
-      setWeather({
-        temp: Math.round(current.temp_c),
-        desc: current.condition.text,
-        icon: current.condition.icon,
-        feelsLike: Math.round(current.feelslike_c),
-        humidity: current.humidity,
-        windKph: Math.round(current.wind_kph),
-      });
-      
-      setWeatherCondition(condition);
-      
-      // ✨ Fade in animation
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 800,
-        useNativeDriver: true,
-      }).start();
-      
-    } catch (e) {
-      console.log('Weather API error:', e.response?.data || e.message);
-      setError('Failed to fetch weather');
-    }
-if (weather && weather.desc.toLowerCase().includes('rain')) {
-  // Send local notif or log for server push
-  console.log('Rain alert ready — send push!');
-  // To send via FCM: Use token from App.js + FCM console
-}
-    setWeatherLoading(false);
-  };
 
   useEffect(() => {
+    (async () => {
+      const fav = await AsyncStorage.getItem(STORAGE.FAVS);
+      if (fav) setFavorites(JSON.parse(fav));
+
+      const cachedNews = await AsyncStorage.getItem(STORAGE.NEWS);
+      if (cachedNews) {
+        const parsed = JSON.parse(cachedNews);
+        if (parsed.length > 0) setNews(parsed);
+      }
+    })();
+
     fetchNews();
     Geolocation.getCurrentPosition(
-      position =>
-        fetchWeather(position.coords.latitude, position.coords.longitude),
-      () => fetchWeather(),
-      {enableHighAccuracy: true, timeout: 30000, maximumAge: 10000},
+      (pos) => fetchWeather(pos.coords.latitude, pos.coords.longitude),
+      (error) => {
+        console.log('Geolocation error:', error);
+        fetchWeather(DEFAULT_LAT, DEFAULT_LON);
+      },
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 },
     );
   }, []);
 
+  const saveFavorites = async (list) =>
+    await AsyncStorage.setItem(STORAGE.FAVS, JSON.stringify(list));
+
+  const onToggleFavorite = (article) => {
+    const key = article.url || article.title;
+    const next = { ...favorites };
+    next[key] ? delete next[key] : (next[key] = article);
+    setFavorites(next);
+    saveFavorites(next);
+  };
+
+  const fetchNews = async (q = '') => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Try to load cached news first
+      const cached = await AsyncStorage.getItem(STORAGE.NEWS);
+      if (cached) setNews(JSON.parse(cached));
+
+      // Build the API URL
+      const url = q
+  ? `https://newsapi.org/v2/everything?q=${encodeURIComponent(q)}&sortBy=publishedAt&language=en&apiKey=${NEWS_API_KEY}`
+  : `https://newsapi.org/v2/everything?q=india&sortBy=publishedAt&language=en&apiKey=${NEWS_API_KEY}`;
+
+      
+      const res = await axios.get(url);
+      
+      console.log("API RESPONSE >>>", res.data);
+
+      if (res.data.articles && res.data.articles.length > 0) {
+        setNews(res.data.articles);
+        await AsyncStorage.setItem(STORAGE.NEWS, JSON.stringify(res.data.articles));
+        setError(null);
+      } else {
+        setError('No news articles found. Try different search terms or pull to refresh.');
+      }
+    } catch (e) {
+      console.error('News fetch error:', e.message);
+      setError('Failed to fetch news. Showing cached articles.');
+    }
+    setLoading(false);
+    setRefreshing(false);
+  };
+
+  const fetchWeather = async (lat, lon) => {
+    setWeatherLoading(true);
+    try {
+      const res = await axios.get('https://api.weatherapi.com/v1/current.json', {
+        params: { key: WEATHER_KEY, q: `${lat},${lon}`, aqi: 'no' },
+      });
+
+      const cur = res.data.current;
+      const cond = getWeatherCondition(cur.condition.text);
+
+      // Manual formula conversion
+      const tempC = cur.temp_c;
+      const tempF = (tempC * 9) / 5 + 32;
+
+      const feelsC = cur.feelslike_c;
+      const feelsF = (feelsC * 9) / 5 + 32;
+
+      setWeather({
+        temp: units === 'c' ? Math.round(tempC) : Math.round(tempF),
+        feelsLike: units === 'c' ? Math.round(feelsC) : Math.round(feelsF),
+        humidity: cur.humidity,
+        desc: cur.condition.text,
+        wind: Math.round(cur.wind_kph),
+        icon: cur.condition.icon,
+      });
+
+      setWeatherCondition(cond);
+
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 700,
+        useNativeDriver: true,
+      }).start();
+    } catch (e) {
+      console.error('Weather fetch error:', e);
+      setError('Weather fetch failed.');
+    }
+    setWeatherLoading(false);
+  };
+
+  const filteredArticles = query
+    ? news.filter((n) =>
+        ((n.title || '') + (n.description || ''))
+          .toLowerCase()
+          .includes(query.toLowerCase())
+      )
+    : news;
+
   const onRefresh = () => {
-    fetchNews();
+    setRefreshing(true);
+    fetchNews(query);
     Geolocation.getCurrentPosition(
-      position =>
-        fetchWeather(position.coords.latitude, position.coords.longitude),
-      () => fetchWeather(),
+      (p) => fetchWeather(p.coords.latitude, p.coords.longitude),
+      () => fetchWeather(DEFAULT_LAT, DEFAULT_LON),
     );
   };
 
-  // 🌈 Beautiful Weather Header with Dynamic Background
+  const openArticle = async (article) => {
+    navigation.navigate('ArticleDetail', { article });
+  };
+
+  const renderItem = ({ item }) => (
+    <NewsCard
+      article={item}
+      onOpen={openArticle}
+      onToggleFavorite={onToggleFavorite}
+      isFavorite={!!favorites[item.url || item.title]}
+    />
+  );
+
   const WeatherHeader = () => (
-    <Animated.View
-      style={{
-        height: weatherHeight,
-        overflow: 'hidden',
-        borderBottomLeftRadius: 30,
-        borderBottomRightRadius: 30,
-      }}
-    >
-      {/* 🖼️ DYNAMIC PARALLAX BACKGROUND */}
+    <Animated.View style={[styles.headerWrap, { height: weatherHeight }]}>
       <Animated.View
-        style={{
-          ...StyleSheet.absoluteFillObject,
-          transform: [{translateY: parallaxTranslate}],
-        }}
+        style={[
+          StyleSheet.absoluteFillObject,
+          { transform: [{ translateY: parallaxTranslate }] },
+        ]}
       >
         <ImageBackground
           source={WEATHER_BACKGROUNDS[weatherCondition]}
-          style={styles.backgroundImage}
+          style={styles.bg}
           resizeMode="cover"
         >
-          {/* 🎨 Dynamic Gradient Overlay */}
           <LinearGradient
             colors={WEATHER_GRADIENTS[weatherCondition]}
-            style={styles.gradientOverlay}
-          />
-          
-          {/* 🌟 Subtle bottom gradient for better text visibility */}
-          <LinearGradient
-            colors={['transparent', 'rgba(0,0,0,0.2)']}
-            style={styles.bottomGradient}
+            style={styles.gradient}
           />
         </ImageBackground>
       </Animated.View>
 
-      {/* ☁️ WEATHER CONTENT */}
       <Animated.View
-        style={[
-          styles.weatherContent,
-          {
-            opacity: weatherOpacity,
-            transform: [{translateY: weatherTranslateY}],
-          },
-        ]}
+        style={[styles.headerContent, { opacity: weatherOpacity }]}
       >
         {weatherLoading ? (
           <ActivityIndicator size="large" color="#fff" />
         ) : (
-          <Animated.View style={[styles.weatherInfo, {opacity: fadeAnim}]}>
-            {/* 🌤️ Weather Icon with glow effect */}
-            {weather?.icon && (
-              <Animated.View
-                style={[
-                  styles.iconContainer,
-                  {transform: [{scale: tempScale}]},
-                ]}
-              >
-                <View style={styles.iconGlow} />
+          <Animated.View style={{ alignItems: 'center', opacity: fadeAnim }}>
+            <View style={styles.tempRow}>
+              {weather?.icon && (
                 <Image
-                  source={{uri: 'https:' + weather.icon}}
-                  style={styles.weatherIcon}
+                  source={{ uri: `https:${weather.icon}` }}
+                  style={styles.icon}
                 />
-              </Animated.View>
-            )}
+              )}
+              <Text style={styles.tempText}>
+                {weather?.temp}°{units.toUpperCase()}
+              </Text>
+            </View>
 
-            {/* 🌡️ Temperature Display */}
-            <Animated.Text
-              style={[
-                styles.temperature,
-                {transform: [{scale: tempScale}]},
-              ]}
-            >
-              {weather?.temp}°
-            </Animated.Text>
+            <Text style={styles.descText}>{weather?.desc}</Text>
 
-            {/* 📝 Weather Description */}
-            <Text style={styles.description}>{weather?.desc}</Text>
+            <View style={styles.statsRow}>
+              <View style={styles.statItem}>
+                <Text style={styles.statLabel}>Feels Like</Text>
+                <Text style={styles.statValue}>{weather?.feelsLike}°</Text>
+              </View>
 
-            {/* 📊 Weather Details Row */}
-            <View style={styles.detailsRow}>
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Feels like</Text>
-                <Text style={styles.detailValue}>{weather?.feelsLike}°C</Text>
+              <View style={[styles.statItem, styles.statDivider]}>
+                <Text style={styles.statLabel}>Humidity</Text>
+                <Text style={styles.statValue}>{weather?.humidity}%</Text>
               </View>
-              
-              <View style={styles.detailDivider} />
-              
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Humidity</Text>
-                <Text style={styles.detailValue}>{weather?.humidity}%</Text>
+
+              <View style={styles.statItem}>
+                <Text style={styles.statLabel}>Wind</Text>
+                <Text style={styles.statValue}>{weather?.wind} km/h</Text>
               </View>
-              
-              <View style={styles.detailDivider} />
-              
-              <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Wind</Text>
-                <Text style={styles.detailValue}>{weather?.windKph} km/h</Text>
-              </View>
+            </View>
+
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={toggleUnits} style={styles.smallBtn}>
+                <Icon name="swap-vertical" size={18} color="#fff" />
+                <Text style={styles.smallBtnText}>
+                  {units === 'c' ? '°C' : '°F'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => navigation.navigate('Profile')}
+                style={styles.smallBtn}
+              >
+                <Icon name="account-circle" size={18} color="#fff" />
+                <Text style={styles.smallBtnText}>Profile</Text>
+              </TouchableOpacity>
             </View>
           </Animated.View>
         )}
@@ -287,161 +317,231 @@ if (weather && weather.desc.toLowerCase().includes('rain')) {
   );
 
   return (
-    <View style={{flex: 1, backgroundColor: colors.background}}>
-      <StatusBar 
-        translucent 
-        backgroundColor="transparent" 
-        barStyle="light-content" 
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <StatusBar
+        translucent
+        backgroundColor="transparent"
+        barStyle="light-content"
       />
-      
+
+      {/* List with integrated header */}
       <AnimatedFlatList
-        data={news}
-        renderItem={({item}) => <NewsCard article={item} />}
-        keyExtractor={item => item.url || Math.random().toString()}
+        data={filteredArticles}
+        renderItem={renderItem}
+        keyExtractor={(item, index) => item.url || item.title || `item-${index}`}
+        ListHeaderComponent={
+          <>
+            <WeatherHeader />
+            
+            {/* Search box - now inside the list */}
+            <View style={styles.searchWrap}>
+              <View style={[styles.searchBox, { backgroundColor: colors.card }]}>
+                <Icon name="magnify" size={22} color={colors.text} />
+
+                <TextInput
+                  placeholder="Search news..."
+                  placeholderTextColor={colors.muted}
+                  style={[styles.searchInput, { color: colors.text }]}
+                  value={query}
+                  onChangeText={setQuery}
+                  onSubmitEditing={() => fetchNews(query)}
+                  returnKeyType="search"
+                />
+
+                {query.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setQuery('');
+                      fetchNews();
+                    }}
+                  >
+                    <Icon name="close-circle" size={22} color={colors.muted} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          </>
+        }
         refreshControl={
-          <RefreshControl 
-            refreshing={loading} 
+          <RefreshControl
+            refreshing={refreshing}
             onRefresh={onRefresh}
             tintColor="#fff"
-            colors={['#3b82f6']}
+            colors={[colors.primary]}
           />
         }
-        ListHeaderComponent={<WeatherHeader />}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
+        ListEmptyComponent={() => (
+          <View style={styles.empty}>
             {loading ? (
               <ActivityIndicator size="large" color={colors.primary} />
-            ) : error ? (
-              <Text style={styles.errorText}>{error}</Text>
             ) : (
-              <Text style={styles.emptyText}>
-                Pull to refresh for news.
-              </Text>
+              <>
+                <Icon name="newspaper-variant-outline" size={64} color={colors.muted} />
+                <Text style={[styles.emptyText, { color: colors.muted }]}>
+                  {error || 'No articles found'}
+                </Text>
+              </>
             )}
           </View>
-        }
-        onScroll={Animated.event(
-          [{nativeEvent: {contentOffset: {y: scrollY}}}],
-          {useNativeDriver: false},
         )}
-        scrollEventThrottle={16}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        contentContainerStyle={{ paddingBottom: 20 }}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{flexGrow: 1}}
       />
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  backgroundImage: {
-    width: '100%',
-    height: '100%',
-  },
-  gradientOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 200,
-  },
-  bottomGradient: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 100,
-  },
-  weatherContent: {
+  container: { 
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingTop: StatusBar.currentHeight || 20,
   },
-  weatherInfo: {
-    alignItems: 'center',
-    paddingHorizontal: 20,
+  
+  searchWrap: { 
+    paddingHorizontal: 16, 
+    paddingTop: 20,
+    paddingBottom: 12,
   },
-  iconContainer: {
-    position: 'relative',
-    marginBottom: 15,
-  },
-  iconGlow: {
-    position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    top: -5,
-    left: -5,
-    zIndex: -1,
-  },
-  weatherIcon: {
-    width: 110,
-    height: 110,
-  },
-  temperature: {
-    color: '#fff',
-    fontSize: 72,
-    fontWeight: '900',
-    textShadowColor: 'rgba(0, 0, 0, 0.3)',
-    textShadowOffset: {width: 0, height: 2},
-    textShadowRadius: 4,
-    letterSpacing: -2,
-  },
-  description: {
-    color: '#fff',
-    fontSize: 22,
-    marginTop: 8,
-    fontWeight: '600',
-    textShadowColor: 'rgba(0, 0, 0, 0.3)',
-    textShadowOffset: {width: 0, height: 1},
-    textShadowRadius: 3,
-  },
-  detailsRow: {
+  searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 24,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: 16,
     paddingVertical: 12,
+    borderRadius: 16,
+    gap: 10,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
+  },
+  searchInput: { 
+    flex: 1, 
+    padding: 0, 
+    fontSize: 16,
+    fontWeight: '500',
+  },
+
+  headerWrap: {
+    overflow: 'hidden',
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+  },
+  bg: { 
+    width: '100%', 
+    height: '100%',
+  },
+  gradient: { 
+    ...StyleSheet.absoluteFillObject,
+  },
+
+  headerContent: {
+    position: 'absolute',
+    top: 60,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+
+  tempRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 16,
+  },
+  icon: { 
+    width: 100, 
+    height: 100,
+  },
+  tempText: { 
+    fontSize: 72, 
+    fontWeight: '900', 
+    color: '#fff',
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  descText: { 
+    color: '#fff', 
+    fontSize: 18,
+    marginTop: 4,
+    fontWeight: '600',
+    textTransform: 'capitalize',
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+
+  statsRow: {
+    flexDirection: 'row',
+    marginTop: 20,
+    paddingVertical: 14,
     paddingHorizontal: 20,
     borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    gap: 0,
     backdropFilter: 'blur(10px)',
   },
-  detailItem: {
-    alignItems: 'center',
-    paddingHorizontal: 12,
+  statItem: { 
+    alignItems: 'center', 
+    flex: 1,
   },
-  detailLabel: {
-    color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: 12,
-    fontWeight: '500',
+  statDivider: {
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  statLabel: { 
+    fontSize: 12, 
+    color: 'rgba(255,255,255,0.8)',
+    fontWeight: '600',
     marginBottom: 4,
   },
-  detailValue: {
+  statValue: { 
+    fontSize: 20, 
+    fontWeight: '800', 
     color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
   },
-  detailDivider: {
-    width: 1,
-    height: 30,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
   },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  smallBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    backdropFilter: 'blur(10px)',
   },
-  errorText: {
-    color: '#666',
-    textAlign: 'center',
-    fontSize: 16,
+  smallBtnText: {
+    color: '#fff',
+    marginLeft: 6,
+    fontWeight: '700',
+    fontSize: 14,
+  },
+
+  empty: { 
+    padding: 40, 
+    alignItems: 'center',
+    gap: 16,
   },
   emptyText: {
-    color: '#666',
-    textAlign: 'center',
     fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
 
